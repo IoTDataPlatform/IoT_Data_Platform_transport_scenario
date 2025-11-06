@@ -1,0 +1,31 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '9.2.2'
+}
+
+group = 'iot.data.platform'
+version = '1.0'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+dependencies {
+    compileOnly 'org.apache.kafka:connect-api:3.9.1'
+
+    implementation platform('com.fasterxml.jackson:jackson-bom:2.17.2')
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+    implementation 'com.fasterxml.jackson.core:jackson-core'
+    implementation 'com.fasterxml.jackson.core:jackson-annotations'
+}
+
+tasks.named('shadowJar') {
+    archiveBaseName.set('file-dump')
+    archiveClassifier.set('')
+}

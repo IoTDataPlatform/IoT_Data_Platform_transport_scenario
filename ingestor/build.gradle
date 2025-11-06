@@ -1,0 +1,27 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '9.2.2'
+}
+
+group = 'iot.data.platform'
+version = '1.0'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+dependencies {
+    implementation 'org.mobilitydata:gtfs-realtime-bindings:0.0.8'
+    compileOnly 'org.apache.kafka:connect-api:3.9.1'
+}
+
+tasks.named('shadowJar') {
+    archiveBaseName.set('gtfsrt-ingestor')
+    archiveClassifier.set('')
+}

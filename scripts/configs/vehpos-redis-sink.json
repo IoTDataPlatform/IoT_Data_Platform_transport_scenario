@@ -1,0 +1,26 @@
+{
+  "name": "vehpos-redis-sink",
+  "config": {
+    "connector.class": "iot.data.platform.cache.position.PositionCacheSinkConnector",
+    "tasks.max": "1",
+
+    "topics": "gtfs.vehicle.positions.sl",
+
+    "redis.host": "redis",
+    "redis.port": "6379",
+    "redis.password": "",
+    "redis.db": "0",
+
+    "redis.key.prefix": "vehpos",
+    "ttl.seconds": "600",
+
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "true",
+
+    "errors.tolerance": "all",
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true"
+  }
+}

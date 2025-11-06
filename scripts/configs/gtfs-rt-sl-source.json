@@ -1,0 +1,24 @@
+{
+  "name": "gtfs-rt-sl-source",
+  "config": {
+    "connector.class": "iot.data.platform.ingestor.FeedSourceConnector",
+    "tasks.max": "1",
+
+    "feed.name": "vehicle-positions",
+    "feed.url": "http://188.253.22.215:8080/fetch?agency=TRAFIKLAB",
+    "feed.agency": "SL",
+    "topic": "gtfs.vehicle.positions.sl",
+    "interval.seconds": "10",
+
+    "fetch.profile": "trafiklab",
+
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "true",
+
+    "errors.tolerance": "all",
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true"
+  }
+}

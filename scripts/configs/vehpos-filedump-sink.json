@@ -1,0 +1,19 @@
+{
+  "name": "vehpos-filedump-sink",
+  "config": {
+    "connector.class": "iot.data.platform.dump.file.FileDumpSinkConnector",
+    "tasks.max": "1",
+
+    "topics": "gtfs.vehicle.positions.sl",
+    "file.path": "/data/dumps/vehpos.ndjson",
+
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "true",
+
+    "errors.tolerance": "all",
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true"
+  }
+}

@@ -1,0 +1,31 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '9.2.2'
+}
+
+group = 'iot.data.platform'
+version = '1.0'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+dependencies {
+    implementation 'redis.clients:jedis:5.1.5'
+    compileOnly 'org.apache.kafka:connect-api:3.9.1'
+
+    implementation 'org.mobilitydata:gtfs-realtime-bindings:0.0.8'
+    implementation 'com.google.protobuf:protobuf-java:3.25.8'
+    implementation 'com.google.protobuf:protobuf-java-util:4.32.1'
+}
+
+tasks.named('shadowJar') {
+    archiveBaseName.set('position-cache')
+    archiveClassifier.set('')
+}
