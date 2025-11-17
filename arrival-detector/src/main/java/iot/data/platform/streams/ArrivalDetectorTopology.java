@@ -47,7 +47,9 @@ public final class ArrivalDetectorTopology {
                     { "name": "arrival_time_local", "type": "string" },
                     { "name": "arrival_time_local_extended", "type": "string" },
                     { "name": "arrival_time_local_seconds", "type": "int" },
-                    { "name": "arrival_time_local_extended_seconds", "type": "int" }
+                    { "name": "arrival_time_local_extended_seconds", "type": "int" },
+                    { "name": "arrival_date", "type": "string" },
+                    { "name": "arrival_prev_date", "type": "string" }
                   ]
                 }
                 """;
@@ -149,6 +151,8 @@ public final class ArrivalDetectorTopology {
                     rec.put("arrival_time_local_extended", event.arrivalTimeLocalExtended());
                     rec.put("arrival_time_local_seconds", event.arrivalTimeLocalSeconds());
                     rec.put("arrival_time_local_extended_seconds", event.arrivalTimeLocalExtendedSeconds());
+                    rec.put("arrival_date", event.arrivalDate());
+                    rec.put("arrival_prev_date", event.arrivalPrevDate());
                     return rec;
                 });
 

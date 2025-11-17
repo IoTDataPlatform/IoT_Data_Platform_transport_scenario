@@ -83,7 +83,9 @@ public class ArrivalDetectorProcessor extends ContextualProcessor<VehicleKey, Ty
                     arrivalTimeLocal,
                     arrivalTimeLocalExtended,
                     arrivalTimeLocalSeconds,
-                    arrivalTimeLocalExtendedSeconds
+                    arrivalTimeLocalExtendedSeconds,
+                    zoned.toLocalDate().toString(),
+                    zoned.toLocalDate().minusDays(1).toString()
             );
             context().forward(record.withValue(event));
         }

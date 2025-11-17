@@ -21,7 +21,9 @@ public final class VehiclePositionSchemas {
                 { "name": "time_local", "type": "string" },
                 { "name": "time_local_extended", "type": "string" },
                 { "name": "time_local_seconds", "type": "int" },
-                { "name": "time_local_extended_seconds", "type": "int" }
+                { "name": "time_local_extended_seconds", "type": "int" },
+                { "name": "local_date", "type": "string" },
+                { "name": "prev_local_date", "type": "string" }
               ]
             }
             """;

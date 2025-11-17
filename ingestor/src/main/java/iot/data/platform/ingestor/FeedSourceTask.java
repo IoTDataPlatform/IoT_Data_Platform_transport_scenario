@@ -220,6 +220,8 @@ public class FeedSourceTask extends SourceTask {
         rec.put("time_local_extended", arrivalTimeLocalExtended);
         rec.put("time_local_seconds", arrivalTimeLocalSeconds);
         rec.put("time_local_extended_seconds", arrivalTimeLocalExtendedSeconds);
+        rec.put("local_date", zoned.toLocalDate().toString());
+        rec.put("prev_local_date", zoned.toLocalDate().minusDays(1).toString());
 
         return rec;
     }

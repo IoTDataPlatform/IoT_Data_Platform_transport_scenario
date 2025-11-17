@@ -311,6 +311,77 @@ services:
       - ./trino/node.properties:/etc/trino/node.properties:ro
       - ./trino/catalog/:/etc/trino/catalog/:ro
 
+  flink-jobmanager:
+    image: flink:1.19.1-java17
+    container_name: flink-jobmanager
+    command: jobmanager
+    ports:
+      - "8180:8081"
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        rest.port: 8081
+        taskmanager.numberOfTaskSlots: 4
+        parallelism.default: 1
+    volumes:
+      - ./flink-lib/flink-connector-kafka-3.2.0-1.19.jar:/opt/flink/lib/flink-connector-kafka-3.2.0-1.19.jar:ro
+      - ./flink-lib/flink-avro-1.19.1.jar:/opt/flink/lib/flink-avro-1.19.1.jar:ro
+      - ./flink-lib/flink-avro-confluent-registry-1.19.1.jar:/opt/flink/lib/flink-avro-confluent-registry-1.19.1.jar:ro
+      - ./flink-lib/avro-1.11.3.jar:/opt/flink/lib/avro-1.11.3.jar:ro
+      - ./flink-lib/kafka-schema-registry-client-7.6.1.jar:/opt/flink/lib/kafka-schema-registry-client-7.6.1.jar:ro
+      - ./flink-lib/kafka-avro-serializer-7.6.1.jar:/opt/flink/lib/kafka-avro-serializer-7.6.1.jar:ro
+      - ./flink-lib/kafka-schema-serializer-7.6.1.jar:/opt/flink/lib/kafka-schema-serializer-7.6.1.jar:ro
+      - ./flink-lib/common-config-7.6.1.jar:/opt/flink/lib/common-config-7.6.1.jar:ro
+      - ./flink-lib/common-utils-7.6.1.jar:/opt/flink/lib/common-utils-7.6.1.jar:ro
+      - ./flink-lib/jackson-annotations-2.17.2.jar:/opt/flink/lib/jackson-annotations-2.17.2.jar:ro
+      - ./flink-lib/jackson-core-2.17.2.jar:/opt/flink/lib/jackson-core-2.17.2.jar:ro
+      - ./flink-lib/jackson-databind-2.17.2.jar:/opt/flink/lib/jackson-databind-2.17.2.jar:ro
+      - ./flink-lib/okhttp-3.14.9.jar:/opt/flink/lib/okhttp-3.14.9.jar:ro
+      - ./flink-lib/okio-1.17.2.jar:/opt/flink/lib/okio-1.17.2.jar:ro
+      - ./flink-lib/guava-32.1.2-jre.jar:/opt/flink/lib/guava-32.1.2-jre.jar:ro
+      - ./flink-lib/kafka-clients-3.7.1.jar:/opt/flink/lib/kafka-clients-3.7.1.jar:ro
+      - ./flink-lib/flink-connector-jdbc-3.2.0-1.19.jar:/opt/flink/lib/flink-connector-jdbc-3.2.0-1.19.jar:ro
+      - ./flink-lib/postgresql-42.7.4.jar:/opt/flink/lib/postgresql-42.7.4.jar:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-schema-registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  flink-taskmanager:
+    image: flink:1.19.1-java17
+    container_name: flink-taskmanager
+    command: taskmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
+    volumes:
+      - ./flink-lib/flink-connector-kafka-3.2.0-1.19.jar:/opt/flink/lib/flink-connector-kafka-3.2.0-1.19.jar:ro
+      - ./flink-lib/flink-avro-1.19.1.jar:/opt/flink/lib/flink-avro-1.19.1.jar:ro
+      - ./flink-lib/flink-avro-confluent-registry-1.19.1.jar:/opt/flink/lib/flink-avro-confluent-registry-1.19.1.jar:ro
+      - ./flink-lib/avro-1.11.3.jar:/opt/flink/lib/avro-1.11.3.jar:ro
+      - ./flink-lib/kafka-schema-registry-client-7.6.1.jar:/opt/flink/lib/kafka-schema-registry-client-7.6.1.jar:ro
+      - ./flink-lib/kafka-avro-serializer-7.6.1.jar:/opt/flink/lib/kafka-avro-serializer-7.6.1.jar:ro
+      - ./flink-lib/kafka-schema-serializer-7.6.1.jar:/opt/flink/lib/kafka-schema-serializer-7.6.1.jar:ro
+      - ./flink-lib/common-config-7.6.1.jar:/opt/flink/lib/common-config-7.6.1.jar:ro
+      - ./flink-lib/common-utils-7.6.1.jar:/opt/flink/lib/common-utils-7.6.1.jar:ro
+      - ./flink-lib/jackson-annotations-2.17.2.jar:/opt/flink/lib/jackson-annotations-2.17.2.jar:ro
+      - ./flink-lib/jackson-core-2.17.2.jar:/opt/flink/lib/jackson-core-2.17.2.jar:ro
+      - ./flink-lib/jackson-databind-2.17.2.jar:/opt/flink/lib/jackson-databind-2.17.2.jar:ro
+      - ./flink-lib/okhttp-3.14.9.jar:/opt/flink/lib/okhttp-3.14.9.jar:ro
+      - ./flink-lib/okio-1.17.2.jar:/opt/flink/lib/okio-1.17.2.jar:ro
+      - ./flink-lib/guava-32.1.2-jre.jar:/opt/flink/lib/guava-32.1.2-jre.jar:ro
+      - ./flink-lib/kafka-clients-3.7.1.jar:/opt/flink/lib/kafka-clients-3.7.1.jar:ro
+      - ./flink-lib/flink-connector-jdbc-3.2.0-1.19.jar:/opt/flink/lib/flink-connector-jdbc-3.2.0-1.19.jar:ro
+      - ./flink-lib/postgresql-42.7.4.jar:/opt/flink/lib/postgresql-42.7.4.jar:ro
+    depends_on:
+      - flink-jobmanager
+
 volumes:
   kafka-data:
   postgres-data:

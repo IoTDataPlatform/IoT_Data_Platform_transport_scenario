@@ -10,6 +10,8 @@ public record StopArrivalEvent(
         String arrivalTimeLocal,
         String arrivalTimeLocalExtended,
         int arrivalTimeLocalSeconds,
-        int arrivalTimeLocalExtendedSeconds
+        int arrivalTimeLocalExtendedSeconds,
+        String arrivalDate,
+        String arrivalPrevDate
 ) {
 }
