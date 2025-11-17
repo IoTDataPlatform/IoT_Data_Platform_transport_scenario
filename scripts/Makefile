@@ -7,10 +7,12 @@ CONNECTORS_CONFIGS_DIR ?= ./configs
 INGESTOR_NAME        ?= gtfs-rt-sl-source
 POSITION_CACHE_NAME  ?= vehpos-redis-sink
 FILE_SINK_NAME       ?= vehpos-filedump-sink
+ICEBERG_SINK_NAME    ?= vehpos-iceberg-sink
 
 INGESTOR_JSON        := $(CONNECTORS_CONFIGS_DIR)/$(INGESTOR_NAME).json
 POSITION_CACHE_JSON  := $(CONNECTORS_CONFIGS_DIR)/$(POSITION_CACHE_NAME).json
 FILE_SINK_JSON       := $(CONNECTORS_CONFIGS_DIR)/$(FILE_SINK_NAME).json
+ICEBERG_SINK_JSON    := $(CONNECTORS_CONFIGS_DIR)/$(ICEBERG_SINK_NAME).json
 
 DB_CONTAINER ?= postgres
 PGUSER ?= app
@@ -152,11 +154,34 @@ resume-filedump-sink:
 restart-filedump-sink:
 	@code="$$( $(call restart_connector,$(FILE_SINK_NAME)) )"; echo "Restart FileDump sink: HTTP $$code"
 
+.PHONY: enable-iceberg-sink disable-iceberg-sink pause-iceberg-sink resume-iceberg-sink restart-iceberg-sink
+
+enable-iceberg-sink: connect-health
+	@code="$$( $(call create_connector,$(ICEBERG_SINK_JSON)) )"; \
+	if [ "$$code" = "201" ] || [ "$$code" = "409" ]; then \
+	  echo "Iceberg sink enabled (HTTP $$code)"; \
+	else echo "Failed to enable Iceberg sink (HTTP $$code)"; exit 1; fi
+
+disable-iceberg-sink:
+	@code="$$( $(call delete_connector,$(ICEBERG_SINK_NAME)) )"; \
+	if [ "$$code" = "204" ] || [ "$$code" = "404" ]; then \
+	  echo "Iceberg sink disabled (HTTP $$code)"; \
+	else echo "Failed to disable Iceberg sink (HTTP $$code)"; exit 1; fi
+
+pause-iceberg-sink:
+	@code="$$( $(call pause_connector,$(ICEBERG_SINK_NAME)) )"; echo "Pause Iceberg sink: HTTP $$code"
+
+resume-iceberg-sink:
+	@code="$$( $(call resume_connector,$(ICEBERG_SINK_NAME)) )"; echo "Resume Iceberg sink: HTTP $$code"
+
+restart-iceberg-sink:
+	@code="$$( $(call restart_connector,$(ICEBERG_SINK_NAME)) )"; echo "Restart Iceberg sink: HTTP $$code"
+
 .PHONY: enable-all disable-all help
-enable-all: enable-gtfs-rt-ingestor-source enable-position-cache-redis-sink
+enable-all: enable-gtfs-rt-ingestor-source enable-position-cache-redis-sink enable-iceberg-sink
 	@echo "All connectors enabled."
 
-disable-all: disable-gtfs-rt-ingestor-source disable-position-cache-redis-sink disable-filedump-sink
+disable-all: disable-gtfs-rt-ingestor-source disable-position-cache-redis-sink disable-filedump-sink disable-iceberg-sink
 	@echo "All connectors disabled."
 
 clean-gtfs-database:

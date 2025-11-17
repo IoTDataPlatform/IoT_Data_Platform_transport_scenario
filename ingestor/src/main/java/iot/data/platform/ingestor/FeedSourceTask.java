@@ -13,10 +13,7 @@ import org.apache.kafka.connect.data.SchemaAndValue;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.apache.kafka.connect.source.SourceTask;
 
-import java.time.Duration;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
+import java.time.*;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -42,7 +39,7 @@ public class FeedSourceTask extends SourceTask {
 
     private static final AvroData AVRO_DATA = new AvroData(0);
 
-    private static final ZoneId BUSINESS_DAY_ZONE = ZoneId.of("UTC");
+    private static final ZoneId BUSINESS_DAY_ZONE = ZoneId.of("UTC+1");
 
     @Override
     public String version() {
@@ -193,7 +190,18 @@ public class FeedSourceTask extends SourceTask {
         long tsSec = computeKeyTs(headerTs, entityTsSec);
         long tsMs = tsSec * 1000L;
 
-        String businessDay = businessDayFromTs(tsMs);
+        ZonedDateTime zoned = Instant.ofEpochMilli(tsMs).atZone(BUSINESS_DAY_ZONE);
+        LocalTime localTime = zoned.toLocalTime();
+
+        int hour   = localTime.getHour();
+        int minute = localTime.getMinute();
+        int second = localTime.getSecond();
+
+        String arrivalTimeLocal = String.format("%02d:%02d:%02d", hour, minute, second);
+        String arrivalTimeLocalExtended = String.format("%02d:%02d:%02d", hour + 24, minute, second);
+
+        int arrivalTimeLocalSeconds = hour * 3600 + minute * 60 + second;
+        int arrivalTimeLocalExtendedSeconds = arrivalTimeLocalSeconds + 24 * 3600;
 
         double lat = pos.getLatitude();
         double lon = pos.getLongitude();
@@ -203,12 +211,15 @@ public class FeedSourceTask extends SourceTask {
 
         GenericRecord rec = new GenericData.Record(VehiclePositionSchemas.VEHICLE_POSITION_SCHEMA);
         rec.put("agency", agency);
-        rec.put("business_day", businessDay);
         rec.put("vehicle_id", vehicleId);
         rec.put("trip_id", tripId);
         rec.put("latitude", lat);
         rec.put("longitude", lon);
         rec.put("ts_ms", tsMs);
+        rec.put("time_local", arrivalTimeLocal);
+        rec.put("time_local_extended", arrivalTimeLocalExtended);
+        rec.put("time_local_seconds", arrivalTimeLocalSeconds);
+        rec.put("time_local_extended_seconds", arrivalTimeLocalExtendedSeconds);
 
         return rec;
     }
@@ -221,13 +232,6 @@ public class FeedSourceTask extends SourceTask {
             return headerTs;
         }
         return Instant.now().getEpochSecond();
-    }
-
-    private String businessDayFromTs(long tsMs) {
-        LocalDate d = Instant.ofEpochMilli(tsMs)
-                .atZone(BUSINESS_DAY_ZONE)
-                .toLocalDate();
-        return d.toString(); // "YYYY-MM-DD"
     }
 
     private void scheduleNext(long callStartMs) {

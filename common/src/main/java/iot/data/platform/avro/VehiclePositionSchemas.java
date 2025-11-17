@@ -13,12 +13,15 @@ public final class VehiclePositionSchemas {
               "namespace": "iot.data.platform.avro",
               "fields": [
                 { "name": "agency",       "type": "string" },
-                { "name": "business_day", "type": "string" },
                 { "name": "vehicle_id",   "type": ["null", "string"], "default": null },
                 { "name": "trip_id",      "type": ["null", "string"], "default": null },
                 { "name": "latitude",     "type": "double" },
                 { "name": "longitude",    "type": "double" },
-                { "name": "ts_ms",        "type": "long" }
+                { "name": "ts_ms",        "type": "long" },
+                { "name": "time_local", "type": "string" },
+                { "name": "time_local_extended", "type": "string" },
+                { "name": "time_local_seconds", "type": "int" },
+                { "name": "time_local_extended_seconds", "type": "int" }
               ]
             }
             """;
