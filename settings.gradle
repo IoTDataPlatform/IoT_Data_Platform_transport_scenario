@@ -1,0 +1,6 @@
+rootProject.name = 'iot_data_platform'
+include 'arrival-detector'
+include 'common'
+include 'file-dump'
+include 'ingestor'
+include 'position-cache'

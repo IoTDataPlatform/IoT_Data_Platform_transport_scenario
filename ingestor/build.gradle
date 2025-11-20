@@ -21,7 +21,7 @@ java {
 }
 
 dependencies {
-    implementation 'iot.data.platform:common'
+    implementation project(":common")
     implementation "io.confluent:kafka-avro-serializer:7.6.1"
     implementation "io.confluent:kafka-connect-avro-converter:7.6.1"
     implementation 'org.mobilitydata:gtfs-realtime-bindings:0.0.8'

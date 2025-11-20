@@ -171,7 +171,7 @@ services:
     restart: unless-stopped
 
   gtfs-backend:
-    build: # path to Dockerfile
+    build: /home/miron/Downloads/gtfs_backend-redis-endpoints/
     container_name: gtfs-backend
     depends_on:
       postgres:
@@ -198,7 +198,7 @@ services:
 
   web:
     build:
-      context: # path to Dockerfile
+      context: /home/miron/WebstormProjects/IoTDP_frontend/
       args:
         VITE_IOTDP_BACKEND_URL: "http://localhost:8082/api"
     container_name: web
