@@ -144,6 +144,24 @@ services:
       retries: 20
       start_period: 20s
 
+  postgres-rt:
+    image: postgis/postgis:18-3.6
+    container_name: postgres-rt
+    environment:
+      POSTGRES_DB: gtfs_rt
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - "5431:5432"
+    volumes:
+      - postgres-data-rt:/var/lib/postgresql-rt
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U app -d gtfs_rt" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
   redis:
     image: redis:7.4
     container_name: redis
@@ -385,5 +403,6 @@ services:
 volumes:
   kafka-data:
   postgres-data:
+  postgres-data-rt:
   minio-data:
   pg-data:
