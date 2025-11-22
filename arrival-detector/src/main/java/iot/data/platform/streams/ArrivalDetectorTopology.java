@@ -89,8 +89,8 @@ public final class ArrivalDetectorTopology {
                             Object vehicleIdVal = rec.get("vehicle_id");
                             Object tripIdVal = rec.get("trip_id");
 
-                            String vehicleId = (vehicleIdVal == null) ? null : vehicleIdVal.toString();
-                            String tripId = (tripIdVal == null) ? null : tripIdVal.toString();
+                            String vehicleId = "".equals(vehicleIdVal.toString()) ? null : vehicleIdVal.toString();
+                            String tripId = "".equals(tripIdVal.toString()) ? null : tripIdVal.toString();
 
                             return new VehicleKey(agency, vehicleId, tripId);
                         })
@@ -100,8 +100,8 @@ public final class ArrivalDetectorTopology {
                             Object vehicleIdVal = rec.get("vehicle_id");
                             Object tripIdVal = rec.get("trip_id");
 
-                            String vehicleId = (vehicleIdVal == null) ? null : vehicleIdVal.toString();
-                            String tripId = (tripIdVal == null) ? null : tripIdVal.toString();
+                            String vehicleId = "".equals(vehicleIdVal.toString()) ? null : vehicleIdVal.toString();
+                            String tripId = "".equals(tripIdVal.toString()) ? null : tripIdVal.toString();
 
                             double lat = (double) rec.get("latitude");
                             double lon = (double) rec.get("longitude");

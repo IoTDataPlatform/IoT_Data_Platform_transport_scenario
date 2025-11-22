@@ -206,8 +206,8 @@ public class FeedSourceTask extends SourceTask {
         double lat = pos.getLatitude();
         double lon = pos.getLongitude();
 
-        String vehicleId = (veh != null && veh.hasId()) ? veh.getId() : null;
-        String tripId = (trip != null && trip.hasTripId()) ? trip.getTripId() : null;
+        String vehicleId = (veh != null && veh.hasId()) ? veh.getId() : "";
+        String tripId = (trip != null && trip.hasTripId()) ? trip.getTripId() : "";
 
         GenericRecord rec = new GenericData.Record(VehiclePositionSchemas.VEHICLE_POSITION_SCHEMA);
         rec.put("agency", agency);
