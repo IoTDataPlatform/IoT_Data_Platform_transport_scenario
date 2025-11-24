@@ -230,6 +230,8 @@ load-gtfs:
 	  $(GTFS_IMAGE) \
 	  --require-dependencies --ignore-unsupported -- '/gtfs/*.txt' \
 	  | docker exec -i $(DB_CONTAINER) env PGPASSWORD=$(PGPASSWORD) psql -U $(PGUSER) -d $(PGDATABASE) -b
+	docker exec -i $(DB_CONTAINER) env PGPASSWORD=$(PGPASSWORD) \
+    	  psql -U $(PGUSER) -d $(PGDATABASE) -f /flink-jobs/init_views.sql
 
 help:
 	@echo "Commands:"

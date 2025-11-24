@@ -332,7 +332,7 @@ services:
   flink-jobmanager:
     image: flink:1.19.1-java17
     container_name: flink-jobmanager
-    command: jobmanager
+    entrypoint: ["/opt/flink/bin/flink-start.sh"]
     ports:
       - "8180:8081"
     environment:
@@ -341,7 +341,7 @@ services:
         jobmanager.rpc.address: flink-jobmanager
         rest.port: 8081
         taskmanager.numberOfTaskSlots: 4
-        parallelism.default: 1
+        parallelism.default: 2
     volumes:
       - ./flink-lib/flink-connector-kafka-3.2.0-1.19.jar:/opt/flink/lib/flink-connector-kafka-3.2.0-1.19.jar:ro
       - ./flink-lib/flink-avro-1.19.1.jar:/opt/flink/lib/flink-avro-1.19.1.jar:ro
@@ -361,6 +361,10 @@ services:
       - ./flink-lib/kafka-clients-3.7.1.jar:/opt/flink/lib/kafka-clients-3.7.1.jar:ro
       - ./flink-lib/flink-connector-jdbc-3.2.0-1.19.jar:/opt/flink/lib/flink-connector-jdbc-3.2.0-1.19.jar:ro
       - ./flink-lib/postgresql-42.7.4.jar:/opt/flink/lib/postgresql-42.7.4.jar:ro
+
+      - ./flink-jobs/flink-start.sh:/opt/flink/bin/flink-start.sh:ro
+      - ./flink-jobs/positions_enricher.sql:/opt/flink/jobs/positions_enricher.sql:ro
+      - ./flink-jobs/arrivals_delay.sql:/opt/flink/jobs/arrivals_delay.sql:ro
     depends_on:
       kafka:
         condition: service_healthy
@@ -399,6 +403,7 @@ services:
       - ./flink-lib/postgresql-42.7.4.jar:/opt/flink/lib/postgresql-42.7.4.jar:ro
     depends_on:
       - flink-jobmanager
+
 
 volumes:
   kafka-data:
