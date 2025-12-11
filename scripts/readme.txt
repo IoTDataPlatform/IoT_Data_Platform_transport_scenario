@@ -124,3 +124,6 @@ Makefile
 - (или: make load GTFS_DIR=./gtfs-data/x)
 * очистить бд, не останавливая контейнер
 - make clean-gtfs-database
+* слияние двух схем
+- make merge
+- (или: make merge SOURCE_SCHEMA=x TARGET_SCHEMA=x)

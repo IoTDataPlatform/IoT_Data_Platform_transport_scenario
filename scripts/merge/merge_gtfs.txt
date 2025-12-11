@@ -1,0 +1,505 @@
+CREATE OR REPLACE FUNCTION merge_gtfs_schemas_with_remap(
+    source_schema TEXT, 
+    target_schema TEXT
+) RETURNS JSONB AS $$
+DECLARE
+    result JSONB;
+    mapping_tables TEXT[] := ARRAY[
+        'agency:agency_id',
+        'routes:route_id', 
+        'stops:stop_id',
+        'calendar:service_id',
+        'shapes:shape_id',
+        'trips:trip_id'
+    ];
+    table_name TEXT;
+    id_column TEXT;
+    table_exists BOOLEAN;
+    agency_id_to_delete TEXT;
+    deleted_agencies_count INTEGER := 0;
+    migrated_count BIGINT := 0;
+    total_migrated BIGINT := 0;
+    max_shapes_id INTEGER := 0;
+    max_frequencies_row INTEGER := 0;
+    max_transfers_id INTEGER := 0;
+BEGIN
+    -- Получаем максимальные значения только если таблицы существуют
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''shapes'')' 
+    INTO table_exists USING target_schema;
+    IF table_exists THEN
+        EXECUTE format('SELECT COALESCE(MAX(id), 0) FROM %I.shapes', target_schema) INTO max_shapes_id;
+    END IF;
+    
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''frequencies'')' 
+    INTO table_exists USING target_schema;
+    IF table_exists THEN
+        EXECUTE format('SELECT COALESCE(MAX(frequencies_row), 0) FROM %I.frequencies', target_schema) INTO max_frequencies_row;
+    END IF;
+    
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''transfers'')' 
+    INTO table_exists USING target_schema;
+    IF table_exists THEN
+        EXECUTE format('SELECT COALESCE(MAX(id), 0) FROM %I.transfers', target_schema) INTO max_transfers_id;
+    END IF;
+    
+    CREATE TEMP TABLE IF NOT EXISTS id_mapping (
+        table_name TEXT,
+        old_id TEXT,
+        new_id TEXT,
+        PRIMARY KEY (table_name, old_id)
+    );
+
+    -- Этап 1: Удаляем дубликаты агентств по имени из target схемы (в правильном порядке зависимостей)
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''agency'')' 
+    INTO table_exists USING source_schema;
+    IF table_exists THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''agency'')' 
+        INTO table_exists USING target_schema;
+        IF table_exists THEN
+            CREATE TEMP TABLE IF NOT EXISTS duplicate_agencies (
+                agency_id TEXT,
+                agency_name TEXT
+            );
+            
+            EXECUTE format(
+                'INSERT INTO duplicate_agencies
+                 SELECT t.agency_id, t.agency_name
+                 FROM %I.agency t
+                 WHERE t.agency_name IN (SELECT agency_name FROM %I.agency)',
+                target_schema, source_schema
+            );
+            
+            FOR agency_id_to_delete IN 
+                SELECT agency_id FROM duplicate_agencies
+            LOOP
+                -- Удаляем в правильном порядке зависимостей:
+                -- 1. transfers (ссылается на trips и routes) - сначала
+               EXECUTE format(
+    'DELETE FROM %I.transfers 
+     WHERE from_route_id IN (SELECT route_id FROM %I.routes WHERE agency_id = $1)
+        OR to_route_id IN (SELECT route_id FROM %I.routes WHERE agency_id = $1)
+        OR from_trip_id IN (SELECT t.trip_id FROM %I.trips t 
+                            JOIN %I.routes r ON t.route_id = r.route_id 
+                            WHERE r.agency_id = $1)
+        OR to_trip_id IN (SELECT t.trip_id FROM %I.trips t 
+                          JOIN %I.routes r ON t.route_id = r.route_id 
+                          WHERE r.agency_id = $1)',
+    target_schema,  -- 1й %I - transfers
+    target_schema,  -- 2й %I - routes (первое)
+    target_schema,  -- 3й %I - routes (второе)
+    target_schema,  -- 4й %I - trips (первое)
+    target_schema,  -- 5й %I - routes (третье)
+    target_schema,  -- 6й %I - trips (второе)
+    target_schema   -- 7й %I - routes (четвертое)
+) USING agency_id_to_delete;
+
+                
+                -- 2. stop_times (зависит от trips)
+                EXECUTE format(
+                    'DELETE FROM %I.stop_times 
+                     WHERE trip_id IN (SELECT t.trip_id FROM %I.trips t 
+                                       JOIN %I.routes r ON t.route_id = r.route_id 
+                                       WHERE r.agency_id = $1)',
+                    target_schema, target_schema, target_schema
+                ) USING agency_id_to_delete;
+                
+                -- 3. frequencies (зависит от trips)
+                EXECUTE format(
+                    'DELETE FROM %I.frequencies 
+                     WHERE trip_id IN (SELECT t.trip_id FROM %I.trips t 
+                                       JOIN %I.routes r ON t.route_id = r.route_id 
+                                       WHERE r.agency_id = $1)',
+                    target_schema, target_schema, target_schema
+                ) USING agency_id_to_delete;
+                
+                -- 4. trips (зависит от routes)
+                EXECUTE format(
+                    'DELETE FROM %I.trips 
+                     WHERE route_id IN (SELECT route_id FROM %I.routes WHERE agency_id = $1)',
+                    target_schema, target_schema
+                ) USING agency_id_to_delete;
+                
+                -- 5. routes (зависит от agency)
+                EXECUTE format(
+                    'DELETE FROM %I.routes WHERE agency_id = $1',
+                    target_schema
+                ) USING agency_id_to_delete;
+                
+                -- 6. agency (сам агентств)
+                EXECUTE format(
+                    'DELETE FROM %I.agency WHERE agency_id = $1',
+                    target_schema
+                ) USING agency_id_to_delete;
+                
+                deleted_agencies_count := deleted_agencies_count + 1;
+            END LOOP;
+            
+            RAISE NOTICE 'Удалено % дублирующихся агентств из target схемы', deleted_agencies_count;
+            DROP TABLE duplicate_agencies;
+        END IF;
+    END IF;
+
+    -- Этап 2: Собираем маппинг для существующих таблиц
+    FOR i IN 1..array_length(mapping_tables, 1) LOOP
+        table_name := split_part(mapping_tables[i], ':', 1);
+        id_column := split_part(mapping_tables[i], ':', 2);
+        
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2)' 
+        INTO table_exists USING source_schema, table_name;
+        
+        IF NOT table_exists THEN
+            RAISE NOTICE 'Таблица %.% не существует, пропускаем', source_schema, table_name;
+            CONTINUE;
+        END IF;
+    
+        EXECUTE format(
+            'INSERT INTO id_mapping (table_name, old_id, new_id)
+             SELECT $1, s.%I, 
+                    substr($1, 1, 2) || ''_'' || 
+                    substr(md5($1 || s.%I || random()::text), 1, 10) || ''_'' || 
+                    round(extract(epoch from now())*1000)::text
+             FROM %I.%I s
+             ON CONFLICT DO NOTHING',
+            id_column, id_column, source_schema, table_name
+        ) USING table_name;
+        
+        RAISE NOTICE 'Создан маппинг для таблицы %', table_name;
+    END LOOP;
+
+
+
+  
+    -- Этап 3: Переносим данные
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''agency'')' 
+    INTO table_exists USING source_schema;
+    IF table_exists THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''agency'')' 
+        INTO table_exists USING target_schema;
+        IF table_exists THEN
+            EXECUTE format(
+                'INSERT INTO %I.agency
+                 SELECT 
+                     m.new_id as agency_id,
+                     s.agency_name,
+                     s.agency_url,
+                     s.agency_timezone,
+                     s.agency_lang,
+                     s.agency_phone,
+                     s.agency_fare_url,
+                     s.agency_email
+                 FROM %I.agency s
+                 JOIN id_mapping m ON m.table_name = ''agency'' AND m.old_id = s.agency_id',
+                target_schema, source_schema
+            );
+            GET DIAGNOSTICS migrated_count = ROW_COUNT;
+            total_migrated := total_migrated + migrated_count;
+            RAISE NOTICE 'agency: перенесено % записей', migrated_count;
+        END IF;
+    END IF;
+
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''routes'')' 
+    INTO table_exists USING source_schema;
+    IF table_exists THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''routes'')' 
+        INTO table_exists USING target_schema;
+        IF table_exists THEN
+            EXECUTE format(
+                'INSERT INTO %I.routes
+                 SELECT 
+                     m_routes.new_id as route_id,
+                     m_agency.new_id as agency_id,
+                     s.route_short_name,
+                     s.route_long_name,
+                     s.route_desc,
+                     s.route_type::text::%I.route_type_val,
+                     s.route_url,
+                     s.route_color,
+                     s.route_text_color,
+                     s.route_sort_order
+                 FROM %I.routes s
+                 JOIN id_mapping m_routes ON m_routes.table_name = ''routes'' AND m_routes.old_id = s.route_id
+                 LEFT JOIN id_mapping m_agency ON m_agency.table_name = ''agency'' AND m_agency.old_id = s.agency_id',
+                target_schema, target_schema, source_schema
+            );
+            GET DIAGNOSTICS migrated_count = ROW_COUNT;
+            total_migrated := total_migrated + migrated_count;
+            RAISE NOTICE 'routes: перенесено % записей', migrated_count;
+        END IF;
+    END IF;
+
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''stops'')' 
+    INTO table_exists USING source_schema;
+    IF table_exists THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''stops'')' 
+        INTO table_exists USING target_schema;
+        IF table_exists THEN
+            EXECUTE format(
+                'INSERT INTO %I.stops
+                 SELECT 
+                     m.new_id as stop_id,
+                     s.stop_code,
+                     s.stop_name,
+                     s.stop_desc,
+                     s.stop_loc,
+                     s.zone_id,
+                     s.stop_url,
+                     s.location_type::text::%I.location_type_val,
+                     m_parent.new_id as parent_station,
+                     s.stop_timezone,
+                     s.wheelchair_boarding::text::%I.wheelchair_boarding_val,
+                     s.level_id,
+                     s.platform_code
+                 FROM %I.stops s
+                 JOIN id_mapping m ON m.table_name = ''stops'' AND m.old_id = s.stop_id
+                 LEFT JOIN id_mapping m_parent ON m_parent.table_name = ''stops'' AND m_parent.old_id = s.parent_station',
+                target_schema, target_schema, target_schema, source_schema
+            );
+            GET DIAGNOSTICS migrated_count = ROW_COUNT;
+            total_migrated := total_migrated + migrated_count;
+            RAISE NOTICE 'stops: перенесено % записей', migrated_count;
+        END IF;
+    END IF;
+
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''calendar'')' 
+    INTO table_exists USING source_schema;
+    IF table_exists THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''calendar'')' 
+        INTO table_exists USING target_schema;
+        IF table_exists THEN
+            EXECUTE format(
+                'INSERT INTO %I.calendar
+                 SELECT 
+                     m.new_id as service_id,
+                     s.monday::text::%I.availability,
+                     s.tuesday::text::%I.availability,
+                     s.wednesday::text::%I.availability,
+                     s.thursday::text::%I.availability,
+                     s.friday::text::%I.availability,
+                     s.saturday::text::%I.availability,
+                     s.sunday::text::%I.availability,
+                     s.start_date,
+                     s.end_date
+                 FROM %I.calendar s
+                 JOIN id_mapping m ON m.table_name = ''calendar'' AND m.old_id = s.service_id',
+                target_schema, target_schema, target_schema, target_schema, target_schema, 
+                target_schema, target_schema, target_schema, source_schema
+            );
+            GET DIAGNOSTICS migrated_count = ROW_COUNT;
+            total_migrated := total_migrated + migrated_count;
+            RAISE NOTICE 'calendar: перенесено % записей', migrated_count;
+        END IF;
+    END IF;
+
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''calendar_dates'')' 
+    INTO table_exists USING source_schema;
+    IF table_exists THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''calendar_dates'')' 
+        INTO table_exists USING target_schema;
+        IF table_exists THEN
+            EXECUTE format(
+                'INSERT INTO %I.calendar_dates
+                 SELECT 
+                     m.new_id as service_id,
+                     s.date,
+                     s.exception_type::text::%I.exception_type_v
+                 FROM %I.calendar_dates s
+                 JOIN id_mapping m ON m.table_name = ''calendar'' AND m.old_id = s.service_id',
+                target_schema, target_schema, source_schema
+            );
+            GET DIAGNOSTICS migrated_count = ROW_COUNT;
+            total_migrated := total_migrated + migrated_count;
+            RAISE NOTICE 'calendar_dates: перенесено % записей', migrated_count;
+        END IF;
+    END IF;
+
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''shapes'')' 
+    INTO table_exists USING source_schema;
+    IF table_exists THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''shapes'')' 
+        INTO table_exists USING target_schema;
+        IF table_exists THEN
+            EXECUTE format(
+                'INSERT INTO %I.shapes
+                 SELECT 
+                     row_number() OVER () + $1 as id,
+                     m.new_id as shape_id,
+                     s.shape_pt_sequence,
+                     s.shape_pt_loc,
+                     s.shape_dist_traveled
+                 FROM %I.shapes s
+                 JOIN id_mapping m ON m.table_name = ''shapes'' AND m.old_id = s.shape_id',
+                target_schema, source_schema
+            ) USING max_shapes_id;
+            GET DIAGNOSTICS migrated_count = ROW_COUNT;
+            total_migrated := total_migrated + migrated_count;
+            RAISE NOTICE 'shapes: перенесено % записей', migrated_count;
+        END IF;
+    END IF;
+
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''trips'')' 
+    INTO table_exists USING source_schema;
+    IF table_exists THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''trips'')' 
+        INTO table_exists USING target_schema;
+        IF table_exists THEN
+            EXECUTE format(
+                'INSERT INTO %I.trips
+                 SELECT 
+                     m_trips.new_id as trip_id,
+                     m_routes.new_id as route_id,
+                     m_calendar.new_id as service_id,
+                     s.trip_headsign,
+                     s.trip_short_name,
+                     s.direction_id,
+                     s.block_id,
+                     m_shapes.new_id as shape_id,
+                     s.wheelchair_accessible::text::%I.wheelchair_accessibility,
+                     s.bikes_allowed::text::%I.bikes_allowance
+                 FROM %I.trips s
+                 JOIN id_mapping m_trips ON m_trips.table_name = ''trips'' AND m_trips.old_id = s.trip_id
+                 JOIN id_mapping m_routes ON m_routes.table_name = ''routes'' AND m_routes.old_id = s.route_id
+                 JOIN id_mapping m_calendar ON m_calendar.table_name = ''calendar'' AND m_calendar.old_id = s.service_id
+                 LEFT JOIN id_mapping m_shapes ON m_shapes.table_name = ''shapes'' AND m_shapes.old_id = s.shape_id',
+                target_schema, target_schema, target_schema, source_schema
+            );
+            GET DIAGNOSTICS migrated_count = ROW_COUNT;
+            total_migrated := total_migrated + migrated_count;
+            RAISE NOTICE 'trips: перенесено % записей', migrated_count;
+        END IF;
+    END IF;
+
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''stop_times'')' 
+    INTO table_exists USING source_schema;
+    IF table_exists THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''stop_times'')' 
+        INTO table_exists USING target_schema;
+        IF table_exists THEN
+            EXECUTE format(
+                'INSERT INTO %I.stop_times
+                 SELECT 
+                     m_trips.new_id as trip_id,
+                     s.arrival_time,
+                     s.departure_time,
+                     m_stops.new_id as stop_id,
+                     s.stop_sequence,
+                     s.stop_sequence_consec,
+                     s.stop_headsign,
+                     s.pickup_type::text::%I.pickup_drop_off_type,
+                     s.drop_off_type::text::%I.pickup_drop_off_type,
+                     s.shape_dist_traveled,
+                     s.timepoint::text::%I.timepoint_v,
+                     s.trip_start_time
+                 FROM %I.stop_times s
+                 JOIN id_mapping m_trips ON m_trips.table_name = ''trips'' AND m_trips.old_id = s.trip_id
+                 JOIN id_mapping m_stops ON m_stops.table_name = ''stops'' AND m_stops.old_id = s.stop_id',
+                target_schema, target_schema, target_schema, target_schema, source_schema
+            );
+            GET DIAGNOSTICS migrated_count = ROW_COUNT;
+            total_migrated := total_migrated + migrated_count;
+            RAISE NOTICE 'stop_times: перенесено % записей', migrated_count;
+        END IF;
+    END IF;
+
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''frequencies'')' 
+    INTO table_exists USING source_schema;
+    IF table_exists THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''frequencies'')' 
+        INTO table_exists USING target_schema;
+        IF table_exists THEN
+            EXECUTE format(
+                'INSERT INTO %I.frequencies
+                 SELECT 
+                     row_number() OVER () + $1 as frequencies_row,
+                     m_trips.new_id as trip_id,
+                     s.start_time,
+                     s.end_time,
+                     s.headway_secs,
+                     s.exact_times::text::%I.exact_times_v
+                 FROM %I.frequencies s
+                 JOIN id_mapping m_trips ON m_trips.table_name = ''trips'' AND m_trips.old_id = s.trip_id',
+                target_schema, target_schema, source_schema
+            ) USING max_frequencies_row;
+            GET DIAGNOSTICS migrated_count = ROW_COUNT;
+            total_migrated := total_migrated + migrated_count;
+            RAISE NOTICE 'frequencies: перенесено % записей', migrated_count;
+        END IF;
+    END IF;
+
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''transfers'')' 
+    INTO table_exists USING source_schema;
+    IF table_exists THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''transfers'')' 
+        INTO table_exists USING target_schema;
+        IF table_exists THEN
+            EXECUTE format(
+                'INSERT INTO %I.transfers
+                 SELECT 
+                     row_number() OVER () + $1 as id,
+                     m_from_stop.new_id as from_stop_id,
+                     m_to_stop.new_id as to_stop_id,
+                     s.transfer_type::text::%I.transfer_type_v,
+                     s.min_transfer_time,
+                     m_from_route.new_id as from_route_id,
+                     m_to_route.new_id as to_route_id,
+                     m_from_trip.new_id as from_trip_id,
+                     m_to_trip.new_id as to_trip_id
+                 FROM %I.transfers s
+                 LEFT JOIN id_mapping m_from_stop ON m_from_stop.table_name = ''stops'' AND m_from_stop.old_id = s.from_stop_id
+                 LEFT JOIN id_mapping m_to_stop ON m_to_stop.table_name = ''stops'' AND m_to_stop.old_id = s.to_stop_id
+                 LEFT JOIN id_mapping m_from_route ON m_from_route.table_name = ''routes'' AND m_from_route.old_id = s.from_route_id
+                 LEFT JOIN id_mapping m_to_route ON m_to_route.table_name = ''routes'' AND m_to_route.old_id = s.to_route_id
+                 LEFT JOIN id_mapping m_from_trip ON m_from_trip.table_name = ''trips'' AND m_from_trip.old_id = s.from_trip_id
+                 LEFT JOIN id_mapping m_to_trip ON m_to_trip.table_name = ''trips'' AND m_to_trip.old_id = s.to_trip_id',
+                target_schema, target_schema, source_schema
+            ) USING max_transfers_id;
+            GET DIAGNOSTICS migrated_count = ROW_COUNT;
+            total_migrated := total_migrated + migrated_count;
+            RAISE NOTICE 'transfers: перенесено % записей', migrated_count;
+        END IF;
+    END IF;
+
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''feed_info'')' 
+    INTO table_exists USING source_schema;
+    IF table_exists THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''feed_info'')' 
+        INTO table_exists USING target_schema;
+        IF table_exists THEN
+            EXECUTE format(
+                'INSERT INTO %I.feed_info
+                 SELECT * FROM %I.feed_info
+                 ON CONFLICT DO NOTHING',
+                target_schema, source_schema
+            );
+            GET DIAGNOSTICS migrated_count = ROW_COUNT;
+            total_migrated := total_migrated + migrated_count;
+            RAISE NOTICE 'feed_info: перенесено % записей', migrated_count;
+        END IF;
+    END IF;
+
+ SELECT jsonb_build_object(
+        'status', 'success',
+        'total_rows_migrated', total_migrated,
+        'duplicate_agencies_removed', deleted_agencies_count,
+        'tables_processed', 11,
+        'id_mappings_created', (SELECT COUNT(*) FROM id_mapping),
+        'source_schema', source_schema,
+        'target_schema', target_schema
+    ) INTO result;
+
+    DROP TABLE id_mapping;
+
+    RETURN result;
+
+EXCEPTION
+    WHEN OTHERS THEN
+        DROP TABLE IF EXISTS id_mapping;
+        DROP TABLE IF EXISTS duplicate_agencies;
+        RETURN jsonb_build_object(
+            'status', 'error',
+            'error_message', SQLERRM,
+            'error_detail', SQLSTATE
+        );
+END;
+$$ LANGUAGE plpgsql;
+
+

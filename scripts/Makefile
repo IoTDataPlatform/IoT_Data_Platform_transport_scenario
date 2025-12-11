@@ -10,6 +10,11 @@ FILE_SINK_NAME       ?= vehpos-filedump-sink
 ICEBERG_SINK_NAME    ?= vehpos-iceberg-sink
 POSTGRESQL_SINK_NAME ?= gtfs-rt-postgres-sink
 
+SCHEMA_NAME          ?= public
+SOURCE_SCHEMA        ?= new
+TARGET_SCHEMA        ?= public
+MERGE_FUNCTION       ?= ./merge/merge_gtfs.txt
+
 INGESTOR_JSON        := $(CONNECTORS_CONFIGS_DIR)/$(INGESTOR_NAME).json
 POSITION_CACHE_JSON  := $(CONNECTORS_CONFIGS_DIR)/$(POSITION_CACHE_NAME).json
 FILE_SINK_JSON       := $(CONNECTORS_CONFIGS_DIR)/$(FILE_SINK_NAME).json
@@ -52,7 +57,7 @@ define restart_connector
 	  $(CONNECT_URL)/connectors/$(1)/restart
 endef
 
-.PHONY: up down clean-volumes restart logs ps clean-gtfs-database load-gtfs unzip
+.PHONY: up down clean-volumes restart logs ps clean-gtfs-database load-gtfs unzip merge
 up:
 	$(DC) up -d
 
@@ -228,8 +233,14 @@ load-gtfs:
 	docker run --rm \
 	  -v "$(GTFS_DIR)":/gtfs \
 	  $(GTFS_IMAGE) \
-	  --require-dependencies --ignore-unsupported -- '/gtfs/*.txt' \
+	  --schema $(SCHEMA_NAME) --require-dependencies --ignore-unsupported -- '/gtfs/*.txt' \
 	  | docker exec -i $(DB_CONTAINER) env PGPASSWORD=$(PGPASSWORD) psql -U $(PGUSER) -d $(PGDATABASE) -b
+
+merge:
+	cat $(MERGE_FUNCTION) | docker exec -i $(DB_CONTAINER) env PGPASSWORD=$(PGPASSWORD) \
+		psql -U $(PGUSER) -d gtfs
+	docker exec -i $(DB_CONTAINER) env PGPASSWORD=$(PGPASSWORD) \
+	psql -U $(PGUSER) -d gtfs -c "SELECT merge_gtfs_schemas_with_remap('$(SOURCE_SCHEMA)', '$(TARGET_SCHEMA)');"
 
 help:
 	@echo "Commands:"
