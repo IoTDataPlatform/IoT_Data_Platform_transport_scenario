@@ -15,13 +15,15 @@ DECLARE
     table_name TEXT;
     id_column TEXT;
     table_exists BOOLEAN;
-    max_id BIGINT;
+    agency_id_to_delete TEXT;
+    deleted_agencies_count INTEGER := 0;
     migrated_count BIGINT := 0;
     total_migrated BIGINT := 0;
     max_shapes_id INTEGER := 0;
     max_frequencies_row INTEGER := 0;
     max_transfers_id INTEGER := 0;
 BEGIN
+    -- Получаем максимальные значения только если таблицы существуют
     EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''shapes'')' 
     INTO table_exists USING target_schema;
     IF table_exists THEN
@@ -47,6 +49,97 @@ BEGIN
         PRIMARY KEY (table_name, old_id)
     );
 
+    -- Этап 1: Удаляем дубликаты агентств по имени из target схемы (в правильном порядке зависимостей)
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''agency'')' 
+    INTO table_exists USING source_schema;
+    IF table_exists THEN
+        EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''agency'')' 
+        INTO table_exists USING target_schema;
+        IF table_exists THEN
+            CREATE TEMP TABLE IF NOT EXISTS duplicate_agencies (
+                agency_id TEXT,
+                agency_name TEXT
+            );
+            
+            EXECUTE format(
+                'INSERT INTO duplicate_agencies
+                 SELECT t.agency_id, t.agency_name
+                 FROM %I.agency t
+                 WHERE t.agency_name IN (SELECT agency_name FROM %I.agency)',
+                target_schema, source_schema
+            );
+            
+            FOR agency_id_to_delete IN 
+                SELECT agency_id FROM duplicate_agencies
+            LOOP
+                -- Удаляем в правильном порядке зависимостей:
+                -- 1. transfers (ссылается на trips и routes) - сначала
+               EXECUTE format(
+    'DELETE FROM %I.transfers 
+     WHERE from_route_id IN (SELECT route_id FROM %I.routes WHERE agency_id = $1)
+        OR to_route_id IN (SELECT route_id FROM %I.routes WHERE agency_id = $1)
+        OR from_trip_id IN (SELECT t.trip_id FROM %I.trips t 
+                            JOIN %I.routes r ON t.route_id = r.route_id 
+                            WHERE r.agency_id = $1)
+        OR to_trip_id IN (SELECT t.trip_id FROM %I.trips t 
+                          JOIN %I.routes r ON t.route_id = r.route_id 
+                          WHERE r.agency_id = $1)',
+    target_schema,  -- 1й %I - transfers
+    target_schema,  -- 2й %I - routes (первое)
+    target_schema,  -- 3й %I - routes (второе)
+    target_schema,  -- 4й %I - trips (первое)
+    target_schema,  -- 5й %I - routes (третье)
+    target_schema,  -- 6й %I - trips (второе)
+    target_schema   -- 7й %I - routes (четвертое)
+) USING agency_id_to_delete;
+
+                
+                -- 2. stop_times (зависит от trips)
+                EXECUTE format(
+                    'DELETE FROM %I.stop_times 
+                     WHERE trip_id IN (SELECT t.trip_id FROM %I.trips t 
+                                       JOIN %I.routes r ON t.route_id = r.route_id 
+                                       WHERE r.agency_id = $1)',
+                    target_schema, target_schema, target_schema
+                ) USING agency_id_to_delete;
+                
+                -- 3. frequencies (зависит от trips)
+                EXECUTE format(
+                    'DELETE FROM %I.frequencies 
+                     WHERE trip_id IN (SELECT t.trip_id FROM %I.trips t 
+                                       JOIN %I.routes r ON t.route_id = r.route_id 
+                                       WHERE r.agency_id = $1)',
+                    target_schema, target_schema, target_schema
+                ) USING agency_id_to_delete;
+                
+                -- 4. trips (зависит от routes)
+                EXECUTE format(
+                    'DELETE FROM %I.trips 
+                     WHERE route_id IN (SELECT route_id FROM %I.routes WHERE agency_id = $1)',
+                    target_schema, target_schema
+                ) USING agency_id_to_delete;
+                
+                -- 5. routes (зависит от agency)
+                EXECUTE format(
+                    'DELETE FROM %I.routes WHERE agency_id = $1',
+                    target_schema
+                ) USING agency_id_to_delete;
+                
+                -- 6. agency (сам агентств)
+                EXECUTE format(
+                    'DELETE FROM %I.agency WHERE agency_id = $1',
+                    target_schema
+                ) USING agency_id_to_delete;
+                
+                deleted_agencies_count := deleted_agencies_count + 1;
+            END LOOP;
+            
+            RAISE NOTICE 'Удалено % дублирующихся агентств из target схемы', deleted_agencies_count;
+            DROP TABLE duplicate_agencies;
+        END IF;
+    END IF;
+
+    -- Этап 2: Собираем маппинг для существующих таблиц
     FOR i IN 1..array_length(mapping_tables, 1) LOOP
         table_name := split_part(mapping_tables[i], ':', 1);
         id_column := split_part(mapping_tables[i], ':', 2);
@@ -73,6 +166,10 @@ BEGIN
         RAISE NOTICE 'Создан маппинг для таблицы %', table_name;
     END LOOP;
 
+
+
+  
+    -- Этап 3: Переносим данные
     EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''agency'')' 
     INTO table_exists USING source_schema;
     IF table_exists THEN
@@ -97,11 +194,7 @@ BEGIN
             GET DIAGNOSTICS migrated_count = ROW_COUNT;
             total_migrated := total_migrated + migrated_count;
             RAISE NOTICE 'agency: перенесено % записей', migrated_count;
-        ELSE
-            RAISE NOTICE 'agency: целевая таблица не существует, пропускаем';
         END IF;
-    ELSE
-        RAISE NOTICE 'agency: исходная таблица не существует, пропускаем';
     END IF;
 
     EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''routes'')' 
@@ -131,11 +224,7 @@ BEGIN
             GET DIAGNOSTICS migrated_count = ROW_COUNT;
             total_migrated := total_migrated + migrated_count;
             RAISE NOTICE 'routes: перенесено % записей', migrated_count;
-        ELSE
-            RAISE NOTICE 'routes: целевая таблица не существует, пропускаем';
         END IF;
-    ELSE
-        RAISE NOTICE 'routes: исходная таблица не существует, пропускаем';
     END IF;
 
     EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''stops'')' 
@@ -168,11 +257,7 @@ BEGIN
             GET DIAGNOSTICS migrated_count = ROW_COUNT;
             total_migrated := total_migrated + migrated_count;
             RAISE NOTICE 'stops: перенесено % записей', migrated_count;
-        ELSE
-            RAISE NOTICE 'stops: целевая таблица не существует, пропускаем';
         END IF;
-    ELSE
-        RAISE NOTICE 'stops: исходная таблица не существует, пропускаем';
     END IF;
 
     EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''calendar'')' 
@@ -202,11 +287,7 @@ BEGIN
             GET DIAGNOSTICS migrated_count = ROW_COUNT;
             total_migrated := total_migrated + migrated_count;
             RAISE NOTICE 'calendar: перенесено % записей', migrated_count;
-        ELSE
-            RAISE NOTICE 'calendar: целевая таблица не существует, пропускаем';
         END IF;
-    ELSE
-        RAISE NOTICE 'calendar: исходная таблица не существует, пропускаем';
     END IF;
 
     EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''calendar_dates'')' 
@@ -228,11 +309,7 @@ BEGIN
             GET DIAGNOSTICS migrated_count = ROW_COUNT;
             total_migrated := total_migrated + migrated_count;
             RAISE NOTICE 'calendar_dates: перенесено % записей', migrated_count;
-        ELSE
-            RAISE NOTICE 'calendar_dates: целевая таблица не существует, пропускаем';
         END IF;
-    ELSE
-        RAISE NOTICE 'calendar_dates: исходная таблица не существует, пропускаем';
     END IF;
 
     EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''shapes'')' 
@@ -256,11 +333,7 @@ BEGIN
             GET DIAGNOSTICS migrated_count = ROW_COUNT;
             total_migrated := total_migrated + migrated_count;
             RAISE NOTICE 'shapes: перенесено % записей', migrated_count;
-        ELSE
-            RAISE NOTICE 'shapes: целевая таблица не существует, пропускаем';
         END IF;
-    ELSE
-        RAISE NOTICE 'shapes: исходная таблица не существует, пропускаем';
     END IF;
 
     EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''trips'')' 
@@ -292,11 +365,7 @@ BEGIN
             GET DIAGNOSTICS migrated_count = ROW_COUNT;
             total_migrated := total_migrated + migrated_count;
             RAISE NOTICE 'trips: перенесено % записей', migrated_count;
-        ELSE
-            RAISE NOTICE 'trips: целевая таблица не существует, пропускаем';
         END IF;
-    ELSE
-        RAISE NOTICE 'trips: исходная таблица не существует, пропускаем';
     END IF;
 
     EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''stop_times'')' 
@@ -328,11 +397,7 @@ BEGIN
             GET DIAGNOSTICS migrated_count = ROW_COUNT;
             total_migrated := total_migrated + migrated_count;
             RAISE NOTICE 'stop_times: перенесено % записей', migrated_count;
-        ELSE
-            RAISE NOTICE 'stop_times: целевая таблица не существует, пропускаем';
         END IF;
-    ELSE
-        RAISE NOTICE 'stop_times: исходная таблица не существует, пропускаем';
     END IF;
 
     EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''frequencies'')' 
@@ -357,11 +422,7 @@ BEGIN
             GET DIAGNOSTICS migrated_count = ROW_COUNT;
             total_migrated := total_migrated + migrated_count;
             RAISE NOTICE 'frequencies: перенесено % записей', migrated_count;
-        ELSE
-            RAISE NOTICE 'frequencies: целевая таблица не существует, пропускаем';
         END IF;
-    ELSE
-        RAISE NOTICE 'frequencies: исходная таблица не существует, пропускаем';
     END IF;
 
     EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''transfers'')' 
@@ -394,11 +455,7 @@ BEGIN
             GET DIAGNOSTICS migrated_count = ROW_COUNT;
             total_migrated := total_migrated + migrated_count;
             RAISE NOTICE 'transfers: перенесено % записей', migrated_count;
-        ELSE
-            RAISE NOTICE 'transfers: целевая таблица не существует, пропускаем';
         END IF;
-    ELSE
-        RAISE NOTICE 'transfers: исходная таблица не существует, пропускаем';
     END IF;
 
     EXECUTE 'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = ''feed_info'')' 
@@ -416,16 +473,13 @@ BEGIN
             GET DIAGNOSTICS migrated_count = ROW_COUNT;
             total_migrated := total_migrated + migrated_count;
             RAISE NOTICE 'feed_info: перенесено % записей', migrated_count;
-        ELSE
-            RAISE NOTICE 'feed_info: целевая таблица не существует, пропускаем';
         END IF;
-    ELSE
-        RAISE NOTICE 'feed_info: исходная таблица не существует, пропускаем';
     END IF;
 
-    SELECT jsonb_build_object(
+ SELECT jsonb_build_object(
         'status', 'success',
         'total_rows_migrated', total_migrated,
+        'duplicate_agencies_removed', deleted_agencies_count,
         'tables_processed', 11,
         'id_mappings_created', (SELECT COUNT(*) FROM id_mapping),
         'source_schema', source_schema,
@@ -439,6 +493,7 @@ BEGIN
 EXCEPTION
     WHEN OTHERS THEN
         DROP TABLE IF EXISTS id_mapping;
+        DROP TABLE IF EXISTS duplicate_agencies;
         RETURN jsonb_build_object(
             'status', 'error',
             'error_message', SQLERRM,
