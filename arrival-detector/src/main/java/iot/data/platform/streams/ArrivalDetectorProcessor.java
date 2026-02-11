@@ -42,7 +42,7 @@ public class ArrivalDetectorProcessor extends ContextualProcessor<VehicleKey, Ty
         VehicleKey key = record.key();
         Types.PositionSample sample = record.value();
 
-        if (sample == null || sample.tripId() == null) {
+        if (sample == null || sample.tripId() == null || sample.tripId().isEmpty()) {
             return;
         }
 

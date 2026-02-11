@@ -189,7 +189,7 @@ services:
     restart: unless-stopped
 
   gtfs-backend:
-    build: /home/miron/Downloads/gtfs_backend-redis-endpoints/
+    build: /home/daria/IdeaProjects/gtfs_backend
     container_name: gtfs-backend
     depends_on:
       postgres:
@@ -206,6 +206,10 @@ services:
 
       SPRING_REDIS_HOST: "redis"
       SPRING_REDIS_PORT: "6379"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_HOST: "redis"
+      SPRING_DATA_REDIS_PORT: "6379"
 
       VEHPOS_RECENCY_SECONDS: "600"
       VEHPOS_TRIP_PREFIX: "vehpos:SL:"
@@ -216,7 +220,7 @@ services:
 
   web:
     build:
-      context: /home/miron/WebstormProjects/IoTDP_frontend/
+      context: /home/daria/IoTDP_frontend
       args:
         VITE_IOTDP_BACKEND_URL: "http://localhost:8082/api"
     container_name: web
